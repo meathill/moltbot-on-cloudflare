@@ -1,0 +1,12 @@
+{
+  "gateway": {
+    "mode": "local",
+    "bind": "lan",
+    "port": 18789
+  },
+  "agents": {
+    "defaults": {
+      "workspace": "/root/s3/clawd"
+    }
+  }
+}

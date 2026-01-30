@@ -549,7 +549,6 @@ function resolveLanAddress() {
 function logNetworkInfoOnce() {
   if (didLogNetInfo) return;
   didLogNetInfo = true;
-  if (readEnvString('DIAGNOSTICS_ENABLED') !== 'true') return;
   try {
     const interfaces = os.networkInterfaces();
     console.log('[entrypoint] 网络接口摘要', {
@@ -735,7 +734,21 @@ function startStatusServer() {
   require('./status-server');
 }
 
-function startMoltbot() {
+function startProbeServer() {
+  mountR2IfConfigured()
+    .catch((error) => {
+      console.error('[entrypoint] R2 挂载失败（probe 模式）', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      recordStartError(error);
+    })
+    .finally(() => {
+      startStatusServer();
+    });
+}
+
+async function startMoltbot() {
+  await mountR2IfConfigured();
   logNetworkInfoOnce();
   const resolved = resolveMoltbotCommand();
   recordProbe(resolved);
@@ -806,7 +819,7 @@ const mode = (readEnvString('CONTAINER_MODE') || 'status').toLowerCase();
 if (mode === 'probe') {
   const resolved = resolveMoltbotCommand();
   recordProbe(resolved);
-  startStatusServer();
+  startProbeServer();
 } else if (mode === 'moltbot') {
   startMoltbot().catch((error) => {
     console.error('[entrypoint] Moltbot 启动失败', {

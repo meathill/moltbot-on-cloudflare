@@ -4,7 +4,6 @@ import { env } from 'cloudflare:workers';
 
 const DEFAULT_PORT = 18789;
 const DEFAULT_BIND = '0.0.0.0';
-const DO_DIAGNOSTICS_PATH = '/__do';
 
 const EXPLICIT_ENV_KEYS = [
   'CONTAINER_MODE',
@@ -42,51 +41,8 @@ const EXPLICIT_ENV_KEYS = [
 
 const runtimeEnv: Record<string, unknown> = env as Record<string, unknown>;
 let didLogContainerConfig = false;
-const DO_DIAGNOSTICS_PATH = '/__do';
 
-type DiagnosticError = {
-  name?: string;
-  message: string;
-  stack?: string;
-};
-
-type LastErrorSnapshot = {
-  at: number;
-  error: DiagnosticError;
-};
-
-type LastStopSnapshot = {
-  at: number;
-  params: StopParams;
-};
-
-export type ContainerDiagnostics = {
-  bind: string;
-  port: number;
-  bindSource: string;
-  portSource: string;
-  explicitEnvKeys: string[];
-  containerEnvKeyCount: number;
-  containerEnvKeys: string[];
-};
-
-type DiagnosticError = {
-  name?: string;
-  message: string;
-  stack?: string;
-};
-
-type LastErrorSnapshot = {
-  at: number;
-  error: DiagnosticError;
-};
-
-type LastStopSnapshot = {
-  at: number;
-  params: StopParams;
-};
-
-export type ContainerDiagnostics = {
+type ContainerDiagnostics = {
   bind: string;
   port: number;
   bindSource: string;
@@ -164,7 +120,7 @@ const containerEnv = buildContainerEnv();
 const resolvedPort = resolvePort(env.CONTAINER_PORT ?? env.PORT);
 const resolvedBind = env.CONTAINER_BIND ?? DEFAULT_BIND;
 
-export function getContainerDiagnostics(): ContainerDiagnostics {
+function getContainerDiagnostics(): ContainerDiagnostics {
   const containerEnvKeys = Object.keys(containerEnv).sort();
   return {
     bind: resolvedBind,
@@ -195,9 +151,6 @@ export class MoltbotContainer extends Container {
     CONTAINER_BIND: resolvedBind,
   };
 
-  private lastError: LastErrorSnapshot | null = null;
-  private lastStop: LastStopSnapshot | null = null;
-
   async onStart() {
     logContainerConfigOnce();
     console.info('[do] 容器已启动', {
@@ -207,23 +160,11 @@ export class MoltbotContainer extends Container {
   }
 
   async onStop(params: StopParams) {
-    this.lastStop = {
-      at: Date.now(),
-      params,
-    };
     console.warn('[do] 容器已停止', params);
   }
 
   onError(error: unknown) {
     if (error instanceof Error) {
-      this.lastError = {
-        at: Date.now(),
-        error: {
-          name: error.name,
-          message: error.message,
-          stack: error.stack,
-        },
-      };
       console.error('[do] 容器错误', {
         name: error.name,
         message: error.message,
@@ -231,73 +172,12 @@ export class MoltbotContainer extends Container {
       });
       return error;
     }
-    this.lastError = {
-      at: Date.now(),
-      error: {
-        message: String(error),
-      },
-    };
     console.error('[do] 容器错误', { error: String(error) });
     return error;
   }
-
-  private formatError(error: unknown): DiagnosticError | null {
-    if (!error) return null;
-    if (error instanceof Error) {
-      return {
-        name: error.name,
-        message: error.message,
-        stack: error.stack,
-      };
-    }
-    return { message: String(error) };
-  }
-
-  private async handleDiagnostics(request: Request) {
-    const url = new URL(request.url);
-    const action = url.searchParams.get('action') ?? 'state';
-    let startError: unknown;
-    if (action === 'start' || action === 'wait') {
-      try {
-        if (action === 'wait') {
-          await this.startAndWaitForPorts(resolvedPort);
-        } else {
-          await this.start();
-        }
-      } catch (error) {
-        startError = error;
-      }
-    }
-    const state = await this.getState();
-    const payload = {
-      action,
-      ok: !startError,
-      error: this.formatError(startError),
-      lastError: this.lastError,
-      lastStop: this.lastStop,
-      state,
-      config: {
-        bind: resolvedBind,
-        port: resolvedPort,
-      },
-    };
-    return new Response(JSON.stringify(payload, null, 2), {
-      status: 200,
-      headers: { 'content-type': 'application/json; charset=utf-8' },
-    });
-  }
-
-  async fetch(request: Request) {
-    const url = new URL(request.url);
-    if (url.pathname === DO_DIAGNOSTICS_PATH) {
-      return this.handleDiagnostics(request);
-    }
-    return super.fetch(request);
-  }
 }
 
-export const SINGLETON_CONTAINER_ID = 'cf-singleton-moltbot';
-export const DO_DIAGNOSTICS_ENDPOINT = DO_DIAGNOSTICS_PATH;
+const SINGLETON_CONTAINER_ID = 'cf-singleton-moltbot';
 
 export async function forwardRequestToContainer(request: Request) {
   logContainerConfigOnce();

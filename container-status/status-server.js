@@ -54,6 +54,14 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (req.url && req.url.startsWith('/__status')) {
+    const body = JSON.stringify(buildStatus());
+    res.statusCode = 200;
+    res.setHeader('content-type', 'application/json; charset=utf-8');
+    res.end(body);
+    return;
+  }
+
   const body = JSON.stringify(buildStatus());
   res.statusCode = 200;
   res.setHeader('content-type', 'application/json; charset=utf-8');

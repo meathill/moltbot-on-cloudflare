@@ -15,7 +15,7 @@
 
 ### 解决方案（已验证）
 - 引入最简 **status server**（`/` 与 `/healthz`）用于确认端口监听。
-- Worker 侧保留 `/__diag` 与 `/__do` 诊断入口，用于查看容器状态与错误快照。
+- status/probe 模式提供 `/__status` 状态入口，用于查看容器状态与启动错误快照。
 - 容器入口支持 `CONTAINER_MODE=status|probe|moltbot`，先用 status/probe 验证基础连通性。
 - 镜像切换到 `node:24-bookworm-slim` 并补齐构建依赖，保证 CLI 可安装、入口不退出。
 
@@ -77,6 +77,6 @@
 - **UI 不安全上下文**：非 HTTPS 或非 localhost 时，WebCrypto 不可用，默认拒绝配对。
 
 ### 解决方案（已验证）
-- 先用 `/__do?action=wait` 确认网关端口健康，再打开 UI。
+- 先切换 `CONTAINER_MODE=probe`，访问 `/__status` 确认 CLI 探测与启动错误，再打开 UI。
 - 自动配对改为 `devices` 并确保 CLI 能连到网关（LAN IP / 指定 `CLAWDBOT_GATEWAY_URL`）。
 - 对齐配置路径为 `~/.clawdbot/moltbot.json`，确保网关启动后可提供 `config.schema`。

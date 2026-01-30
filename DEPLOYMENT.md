@@ -30,10 +30,6 @@ wrangler login
 - `SERVER_PASSWORD`：设置后启用 Basic Auth
 - `SERVER_USERNAME`：可选，默认 `moltbot`
 
-### 诊断开关（可选）
-
-- `DIAGNOSTICS_ENABLED`：`true` 时开放 `/__diag` 与 `/__do`
-
 ### 容器最简服务（可选，默认）
 
 - `CONTAINER_STATUS_MESSAGE`：返回 JSON 的 message 字段
@@ -84,7 +80,6 @@ wrangler secret put SERVER_PASSWORD
 
 在 Cloudflare Dashboard 的 Worker 项目里设置：
 
-- `DIAGNOSTICS_ENABLED`
 - `CONTAINER_STATUS_MESSAGE`
 - `CONTAINER_VERSION`
 - `CONTAINER_PORT`
@@ -98,10 +93,9 @@ pnpm deploy
 
 ## 验证（最简容器）
 
-1. 访问根路径 `/`：应返回 JSON 状态。
+1. 访问 `/__status`：应返回 JSON 状态。
 2. 访问 `/healthz`：应返回 `ok`。
-3. 若开启诊断，访问 `/__diag`：应返回 Worker + 容器摘要。
-4. 若开启诊断，访问 `/__do?action=state|start|wait`：可查看容器状态与最近错误。
+3. 访问根路径 `/`：应返回 JSON 状态（同 `/__status`）。
 
 ## 切换到 Moltbot Gateway（稳健版）
 
@@ -113,8 +107,7 @@ pnpm deploy
 ## 验证（Moltbot）
 
 1. 访问根路径 `/`：应返回 Moltbot Gateway 的响应（不再是最简 JSON）。
-2. 若诊断开启，访问 `/__diag` 确认容器环境包含 `MOLTBOT_GATEWAY_*` 与 `CLAWDBOT_GATEWAY_TOKEN`。
-3. 若 Gateway 无响应，访问 `/__do?action=wait` 获取最近错误快照。
+2. 若 Gateway 无响应，先切换到 `CONTAINER_MODE=probe`，访问 `/__status` 查看 CLI 探测结果与启动错误。
 
 ## 自动配对（可选）
 
@@ -132,11 +125,10 @@ clawdbot devices approve <requestId> --url ws://127.0.0.1:18789 --token $CLAWDBO
 
 当 `CONTAINER_MODE=probe` 时，只启动最简服务并附带 Moltbot CLI 探测结果，方便确认 CLI 是否可执行：
 
-1. 访问 `/` 返回 JSON，其中 `probe` 字段包含 `moltbot/clawdbot/clawd` 的探测结果。
+1. 访问 `/__status`（或 `/`）返回 JSON，其中 `probe` 字段包含 `moltbot/clawdbot/clawd` 的探测结果。
 2. 若 `probe.ok=false`，说明 CLI 未找到或无法执行，需要调整镜像或 CLI 名称。
 
 ## 常见问题
 
 - 401：说明启用了 Basic Auth，请检查 `SERVER_PASSWORD`。
-- `/__diag` 404：说明未开启 `DIAGNOSTICS_ENABLED=true`。
-- 容器未监听端口：先访问 `/__do?action=start`，再访问 `/__do?action=wait` 查看错误快照。
+- `/__status` 404：多半是 `CONTAINER_MODE=moltbot`，或网关已接管端口；切回 `status/probe` 再试。

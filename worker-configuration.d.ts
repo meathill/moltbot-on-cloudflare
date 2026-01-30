@@ -7,7 +7,6 @@ declare namespace Cloudflare {
         durableNamespaces: 'MoltbotContainerV2';
     }
     interface Env {
-        DIAGNOSTICS_ENABLED?: string;
         SERVER_USERNAME?: string;
         SERVER_PASSWORD?: string;
         CONTAINER_MODE?: string;
@@ -36,7 +35,6 @@ declare namespace NodeJS {
         extends StringifyValues<
             Pick<
                 Cloudflare.Env,
-                | 'DIAGNOSTICS_ENABLED'
                 | 'SERVER_USERNAME'
                 | 'SERVER_PASSWORD'
                 | 'CONTAINER_MODE'

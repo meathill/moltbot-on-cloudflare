@@ -51,6 +51,7 @@
     "CLAWDBOT_AUTO_APPROVE_DEVICES": "true",
     "CONTAINER_MODE": "moltbot",
     "DIAGNOSTICS_ENABLED": "true",
-    "MOLTBOT_CLI": "clawdbot"
+    "MOLTBOT_CLI": "clawdbot",
+    "MOLTBOT_GATEWAY_AUTH_MODE": "token"
   }
 }

@@ -9,7 +9,7 @@ const DEFAULT_PORT = 18789;
 const DEFAULT_BIND_MODE = 'lan';
 const DEFAULT_CONFIG_PATH = '/root/.clawdbot/moltbot.json';
 const DEFAULT_AUTO_APPROVE_INTERVAL = 4000;
-let didLogNetInfo = false;
+let didLogGatewaySuccess = false;
 
 function readEnvString(key) {
   const value = process.env[key];
@@ -304,22 +304,29 @@ function resolveGatewayPort() {
   );
 }
 
-function resolveGatewayUrl() {
+function resolveGatewayUrlCandidates() {
   const explicit = readEnvString('CLAWDBOT_GATEWAY_URL') || readEnvString('MOLTBOT_GATEWAY_URL');
-  if (explicit) return explicit;
+  if (explicit) return [explicit];
   const bindMode =
     readEnvString('CLAWDBOT_GATEWAY_BIND') ||
     readEnvString('MOLTBOT_GATEWAY_BIND') ||
     DEFAULT_BIND_MODE;
   const port = resolveGatewayPort();
-  if (bindMode === 'loopback') {
-    return `ws://127.0.0.1:${port}`;
-  }
+  const loopbackUrl = `ws://127.0.0.1:${port}`;
+  const localhostUrl = `ws://localhost:${port}`;
   const lanAddress = resolveLanAddress();
-  if (lanAddress) {
-    return `ws://${lanAddress}:${port}`;
+  const lanUrl = lanAddress ? `ws://${lanAddress}:${port}` : null;
+  const ordered = [];
+  if (bindMode === 'loopback') {
+    ordered.push(loopbackUrl);
+    ordered.push(localhostUrl);
+    if (lanUrl) ordered.push(lanUrl);
+  } else {
+    if (lanUrl) ordered.push(lanUrl);
+    ordered.push(loopbackUrl);
+    ordered.push(localhostUrl);
   }
-  return `ws://127.0.0.1:${port}`;
+  return Array.from(new Set(ordered.filter(Boolean)));
 }
 
 function resolveLanAddress() {
@@ -340,23 +347,6 @@ function resolveLanAddress() {
     }
   }
   return undefined;
-}
-
-function logNetworkInfoOnce() {
-  if (didLogNetInfo) return;
-  didLogNetInfo = true;
-  if (readEnvString('DIAGNOSTICS_ENABLED') !== 'true') return;
-  try {
-    const interfaces = os.networkInterfaces();
-    console.log('[entrypoint] 网络接口摘要', {
-      interfaces,
-      resolvedLanAddress: resolveLanAddress(),
-    });
-  } catch (error) {
-    console.warn('[entrypoint] 网络接口摘要失败', {
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
 }
 
 function collectPendingRequestIds(payload) {
@@ -418,66 +408,113 @@ function runCli(command, args, onDone) {
   });
 }
 
+function runCliOnce(command, args) {
+  return new Promise((resolve) => {
+    runCli(command, args, (code, stdout, stderr) => {
+      resolve({ code, stdout, stderr });
+    });
+  });
+}
+
+async function fetchPendingDevices(resolved, gatewayUrl, gatewayToken) {
+  const pendingArgs = buildCliArgs(resolved, ['devices', 'list', '--json', '--url', gatewayUrl]);
+  if (gatewayToken) {
+    pendingArgs.push('--token', gatewayToken);
+  }
+  return runCliOnce(resolved.command, pendingArgs);
+}
+
+async function approveDevice(resolved, gatewayUrl, gatewayToken, id) {
+  const approveArgs = buildCliArgs(resolved, ['devices', 'approve', id, '--url', gatewayUrl]);
+  if (gatewayToken) {
+    approveArgs.push('--token', gatewayToken);
+  }
+  return runCliOnce(resolved.command, approveArgs);
+}
+
+async function autoApproveDevices(resolved) {
+  const gatewayUrls = resolveGatewayUrlCandidates();
+  const gatewayToken = readEnvString('CLAWDBOT_GATEWAY_TOKEN');
+  if (gatewayUrls.length === 0) {
+    console.warn('[entrypoint] 自动配对设备失败：未能解析网关地址');
+    return;
+  }
+
+  for (const gatewayUrl of gatewayUrls) {
+    const result = await fetchPendingDevices(resolved, gatewayUrl, gatewayToken);
+    if (result.code !== 0) {
+      console.warn('[entrypoint] 读取设备配对列表失败', {
+        code: result.code,
+        gatewayUrl,
+        stderr: result.stderr.trim(),
+      });
+      continue;
+    }
+    let payload;
+    try {
+      payload = JSON.parse(result.stdout);
+    } catch (error) {
+      console.warn('[entrypoint] 设备配对列表输出非 JSON', {
+        gatewayUrl,
+        error: error instanceof Error ? error.message : String(error),
+        stdout: result.stdout.trim(),
+      });
+      return;
+    }
+    const ids = collectPendingRequestIds(payload);
+    if (!didLogGatewaySuccess) {
+      didLogGatewaySuccess = true;
+      console.log('[entrypoint] 读取设备配对列表成功', {
+        gatewayUrl,
+        pendingCount: ids.length,
+      });
+    }
+    if (ids.length === 0) {
+      return;
+    }
+    for (const id of ids) {
+      const approveResult = await approveDevice(resolved, gatewayUrl, gatewayToken, id);
+      if (approveResult.code === 0) {
+        console.log('[entrypoint] 已自动配对设备', { id, gatewayUrl });
+        continue;
+      }
+      console.warn('[entrypoint] 自动配对设备失败', {
+        id,
+        gatewayUrl,
+        code: approveResult.code,
+        stderr: approveResult.stderr.trim(),
+        stdout: approveResult.stdout.trim(),
+      });
+    }
+    return;
+  }
+}
+
 function startAutoApproveDevices(resolved) {
   const explicitDevices = readEnvString('CLAWDBOT_AUTO_APPROVE_DEVICES');
   const legacyNodes = readEnvString('CLAWDBOT_AUTO_APPROVE_NODES');
   const enabled = parseBoolean(explicitDevices ?? legacyNodes);
   if (!enabled) return;
   const interval = parseInterval(readEnvString('CLAWDBOT_AUTO_APPROVE_INTERVAL_MS'));
-  const gatewayUrl = resolveGatewayUrl();
-  const gatewayToken = readEnvString('CLAWDBOT_GATEWAY_TOKEN');
   if (explicitDevices === undefined && legacyNodes !== undefined) {
     console.log('[entrypoint] CLAWDBOT_AUTO_APPROVE_NODES 已弃用，建议改用 CLAWDBOT_AUTO_APPROVE_DEVICES');
   }
-  console.log('[entrypoint] 自动配对设备已开启', { interval, gatewayUrl });
+  const gatewayUrls = resolveGatewayUrlCandidates();
+  console.log('[entrypoint] 自动配对设备已开启', { interval, gatewayUrls });
 
   let running = false;
   setInterval(() => {
     if (running) return;
     running = true;
-    const pendingArgs = buildCliArgs(resolved, ['devices', 'list', '--json', '--url', gatewayUrl]);
-    if (gatewayToken) {
-      pendingArgs.push('--token', gatewayToken);
-    }
-    runCli(resolved.command, pendingArgs, (code, stdout, stderr) => {
-      running = false;
-      if (code !== 0) {
-        console.warn('[entrypoint] 读取设备配对列表失败', { code, stderr: stderr.trim() });
-        return;
-      }
-      let payload;
-      try {
-        payload = JSON.parse(stdout);
-      } catch (error) {
-        console.warn('[entrypoint] 设备配对列表输出非 JSON', {
-          error: error instanceof Error ? error.message : String(error),
-          stdout: stdout.trim(),
+    autoApproveDevices(resolved)
+      .catch((error) => {
+        console.warn('[entrypoint] 自动配对设备失败', {
+          message: error instanceof Error ? error.message : String(error),
         });
-        return;
-      }
-      const ids = collectPendingRequestIds(payload);
-      if (ids.length === 0) {
-        return;
-      }
-      for (const id of ids) {
-        const approveArgs = buildCliArgs(resolved, ['devices', 'approve', id, '--url', gatewayUrl]);
-        if (gatewayToken) {
-          approveArgs.push('--token', gatewayToken);
-        }
-        runCli(resolved.command, approveArgs, (approveCode, approveOut, approveErr) => {
-          if (approveCode === 0) {
-            console.log('[entrypoint] 已自动配对设备', { id });
-            return;
-          }
-          console.warn('[entrypoint] 自动配对设备失败', {
-            id,
-            code: approveCode,
-            stderr: approveErr.trim(),
-            stdout: approveOut.trim(),
-          });
-        });
-      }
-    });
+      })
+      .finally(() => {
+        running = false;
+      });
   }, interval);
 }
 
@@ -522,7 +559,6 @@ function startStatusServer() {
 }
 
 function startMoltbot() {
-  logNetworkInfoOnce();
   const resolved = resolveMoltbotCommand();
   recordProbe(resolved);
   if (!resolved.command) {
@@ -533,7 +569,6 @@ function startMoltbot() {
   }
   const configPath = readEnvString('CLAWDBOT_CONFIG_PATH') || DEFAULT_CONFIG_PATH;
   const configJson = readEnvString('MOLTBOT_CONFIG_JSON') || buildDefaultConfig();
-
   writeConfigFile(configPath, configJson);
   process.env.CLAWDBOT_CONFIG_PATH = configPath;
   process.env.MOLTBOT_CONFIG_PATH = configPath;

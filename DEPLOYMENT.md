@@ -1,12 +1,13 @@
-# 部署指南
+# 部署指南（最简容器 + Moltbot Gateway）
 
-本文档说明如何将本项目部署到 Cloudflare Workers + Cloudflare Containers。
+本文档描述如何把最简容器版本部署到 Cloudflare Workers + Containers，并逐步切换到 Moltbot Gateway。
 
 ## 前置条件
 
-- 已开通 Cloudflare 账号（可用 Workers + Containers）
-- 本地安装 pnpm、Node.js（建议 v20+）
-- 已安装 Wrangler CLI（`pnpm add -g wrangler`）
+- 已开通 Cloudflare Workers + Containers
+- Node.js >= 24
+- pnpm
+- Wrangler CLI（`pnpm add -g wrangler`）
 
 ## 一次性准备
 
@@ -22,70 +23,70 @@ pnpm install
 wrangler login
 ```
 
-## 配置说明
+## 环境变量
 
-### Worker 层 Basic Auth
+### Worker 层 Basic Auth（可选）
 
-- 设置 `SERVER_PASSWORD` 后即开启鉴权
-- 不设置则关闭鉴权
-- `SERVER_USERNAME` 可选，默认 `meathillbot`
+- `SERVER_PASSWORD`：设置后启用 Basic Auth
+- `SERVER_USERNAME`：可选，默认 `moltbot`
 
-### 容器层 Moltbot 配置
+### 诊断开关（可选）
 
-- `config/moltbot/moltbot.json` 是默认配置模板
-- 可用环境变量覆盖：
-  - `MOLTBOT_CONFIG_JSON`：直接写入配置内容（JSON/JSON5）
-  - `MOLTBOT_CONFIG_PATH`：指定配置文件路径
+- `DIAGNOSTICS_ENABLED`：`true` 时开放 `/__diag` 与 `/__do`
 
-### 环境变量与 Secrets
+### 容器最简服务（可选，默认）
 
-推荐做法：敏感信息用 `wrangler secret put`，非敏感信息在 Cloudflare 控制台 Variables 中设置。
+- `CONTAINER_STATUS_MESSAGE`：返回 JSON 的 message 字段
+- `CONTAINER_VERSION`：返回 JSON 的 version 字段
+- `CONTAINER_PORT`：容器监听端口（默认 18789）
+- `CONTAINER_BIND`：容器监听地址（默认 0.0.0.0）
 
-常用变量：
+### 容器模式切换
 
-- `SERVER_PASSWORD`（建议 Secret）
-- `SERVER_USERNAME`
-- `MOLTBOT_GATEWAY_PORT`（默认 18789）
-- `MOLTBOT_GATEWAY_BIND`（默认 lan）
-- `MOLTBOT_STATE_DIR`（默认 /root/s3/moltbot）
-- `MOLTBOT_WORKSPACE_DIR`（默认 /root/s3/clawd）
-- `MOLTBOT_ARGS`（可选）
+- `CONTAINER_MODE=status|moltbot|probe`：默认 `status`
 
-S3/R2 持久化（可选）：
+### Moltbot Gateway（稳健版）
 
-- `S3_ENDPOINT`
-- `S3_BUCKET`
-- `S3_ACCESS_KEY_ID`（建议 Secret）
-- `S3_SECRET_ACCESS_KEY`（建议 Secret）
-- `S3_REGION`（可选）
-- `S3_PATH_STYLE`（可选）
-- `S3_PREFIX`（可选）
-- `TIGRISFS_ARGS`（可选）
+- `CLAWDBOT_GATEWAY_TOKEN`：Gateway Token（Secret，必填）
+- `MOLTBOT_GATEWAY_BIND`：Gateway 绑定模式（默认 `lan`）
+- `MOLTBOT_GATEWAY_PORT`：Gateway 端口（默认 18789）
+- `MOLTBOT_GATEWAY_AUTH_MODE`：认证模式（默认 `token`）
+- `MOLTBOT_GATEWAY_VERBOSE`：是否启用 verbose（默认 false）
+- `MOLTBOT_ALLOW_UNCONFIGURED`：是否允许无配置启动（默认 false）
+- `MOLTBOT_CLI`：指定 CLI 命令（默认自动探测）
+- `MOLTBOT_CONFIG_JSON`：可选，自定义配置 JSON/JSON5（不建议在变量里直接放明文）
+- `CLAWDBOT_CONFIG_PATH`：可选，配置文件路径（默认 `/root/.clawdbot/moltbot.json`）
+- `CLAWDBOT_GATEWAY_URL`：可选，覆盖自动配对使用的网关地址
+- `CLAWDBOT_AUTO_APPROVE_DEVICES`：自动配对设备（默认 false）
+- `CLAWDBOT_AUTO_APPROVE_NODES`：旧字段，等价于 `CLAWDBOT_AUTO_APPROVE_DEVICES`
+- `CLAWDBOT_AUTO_APPROVE_INTERVAL_MS`：自动配对轮询间隔（默认 4000ms）
 
-## 部署步骤
+> 说明：镜像内默认安装 `clawdbot@latest` 并自动探测 CLI，可用 `MOLTBOT_CLI=clawdbot` 强制指定。
 
-### 1) 设置 Secrets（示例）
+## 配置建议
+
+- 敏感信息（如 `SERVER_PASSWORD`）请使用 `wrangler secret put`
+- 非敏感变量可放在 Cloudflare Dashboard 的 Variables，或写入 `wrangler.jsonc` 的 `vars`
+
+> 如果修改了 `wrangler.jsonc`，建议运行 `pnpm cf-typegen` 以刷新类型文件。
+
+## 部署步骤（最简容器）
+
+### 1) 设置 Secrets（可选）
 
 ```bash
 wrangler secret put SERVER_PASSWORD
-wrangler secret put S3_ACCESS_KEY_ID
-wrangler secret put S3_SECRET_ACCESS_KEY
 ```
 
-### 2) 配置 Variables（控制台）
+### 2) 设置 Variables（可选）
 
-在 Cloudflare Dashboard 的 Worker 项目里设置非敏感变量，例如：
+在 Cloudflare Dashboard 的 Worker 项目里设置：
 
-- `SERVER_USERNAME`
-- `MOLTBOT_GATEWAY_PORT`
-- `MOLTBOT_GATEWAY_BIND`
-- `MOLTBOT_STATE_DIR`
-- `MOLTBOT_WORKSPACE_DIR`
-- `S3_ENDPOINT`
-- `S3_BUCKET`
-- `S3_PREFIX`
-
-> 如需在 `wrangler.jsonc` 增加 `vars`，记得运行 `pnpm cf-typegen`。
+- `DIAGNOSTICS_ENABLED`
+- `CONTAINER_STATUS_MESSAGE`
+- `CONTAINER_VERSION`
+- `CONTAINER_PORT`
+- `CONTAINER_BIND`
 
 ### 3) 部署
 
@@ -93,20 +94,47 @@ wrangler secret put S3_SECRET_ACCESS_KEY
 pnpm deploy
 ```
 
-## 验证与常见检查
+## 验证（最简容器）
 
-1. 部署完成后，Wrangler 会输出访问地址。
-2. 若启用了 Basic Auth，请使用浏览器输入账号密码访问。
-3. 首次启动可能需要拉取依赖并初始化配置，等待 1-2 分钟后刷新。
-4. 若使用 R2，请确认 `S3_*` 变量正确，容器日志中应看到挂载成功提示。
+1. 访问根路径 `/`：应返回 JSON 状态。
+2. 访问 `/healthz`：应返回 `ok`。
+3. 若开启诊断，访问 `/__diag`：应返回 Worker + 容器摘要。
+4. 若开启诊断，访问 `/__do?action=state|start|wait`：可查看容器状态与最近错误。
 
-## 升级与重新部署
+## 切换到 Moltbot Gateway（稳健版）
 
-- 修改 Worker/Container 代码后，直接执行 `pnpm deploy` 重新发布。
-- 修改 `wrangler.jsonc`（绑定/容器参数）后，先 `pnpm cf-typegen` 再部署。
+1. 确保已设置 `CLAWDBOT_GATEWAY_TOKEN`（Secret）。
+2. 设置 `CONTAINER_MODE=moltbot`。
+3. （可选）设置 `MOLTBOT_GATEWAY_BIND` 与 `MOLTBOT_GATEWAY_PORT`。
+4. 重新部署：`pnpm deploy`。
+
+## 验证（Moltbot）
+
+1. 访问根路径 `/`：应返回 Moltbot Gateway 的响应（不再是最简 JSON）。
+2. 若诊断开启，访问 `/__diag` 确认容器环境包含 `MOLTBOT_GATEWAY_*` 与 `CLAWDBOT_GATEWAY_TOKEN`。
+3. 若 Gateway 无响应，访问 `/__do?action=wait` 获取最近错误快照。
+
+## 自动配对（可选）
+
+设置 `CLAWDBOT_AUTO_APPROVE_DEVICES=true` 后，容器会定期执行 `clawdbot devices list --json` 并自动 approve 所有 pending 设备请求，用于快速试用与排障。
+（兼容旧字段：`CLAWDBOT_AUTO_APPROVE_NODES=true`）
+
+手动配对可用：
+
+```bash
+clawdbot devices list --json --url ws://127.0.0.1:18789 --token $CLAWDBOT_GATEWAY_TOKEN
+clawdbot devices approve <requestId> --url ws://127.0.0.1:18789 --token $CLAWDBOT_GATEWAY_TOKEN
+```
+
+## Probe 模式（排查用）
+
+当 `CONTAINER_MODE=probe` 时，只启动最简服务并附带 Moltbot CLI 探测结果，方便确认 CLI 是否可执行：
+
+1. 访问 `/` 返回 JSON，其中 `probe` 字段包含 `moltbot/clawdbot/clawd` 的探测结果。
+2. 若 `probe.ok=false`，说明 CLI 未找到或无法执行，需要调整镜像或 CLI 名称。
 
 ## 常见问题
 
-- 访问 401：说明启用了 Basic Auth，请检查 `SERVER_PASSWORD` 与账号。
-- 启动失败：检查 `moltbot.json` 配置是否完整、R2/S3 变量是否正确。
-- 状态丢失：请开启 R2 持久化，确认 `S3_*` 配置有效。
+- 401：说明启用了 Basic Auth，请检查 `SERVER_PASSWORD`。
+- `/__diag` 404：说明未开启 `DIAGNOSTICS_ENABLED=true`。
+- 容器未监听端口：先访问 `/__do?action=start`，再访问 `/__do?action=wait` 查看错误快照。

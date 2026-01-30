@@ -23,6 +23,14 @@ function buildStatus() {
       startError = { message: String(error) };
     }
   }
+  let r2Mount = globalThis.__moltbotR2Mount;
+  if (!r2Mount && process.env.MOLTBOT_R2_MOUNT_STATUS) {
+    try {
+      r2Mount = JSON.parse(process.env.MOLTBOT_R2_MOUNT_STATUS);
+    } catch (error) {
+      r2Mount = { error: String(error) };
+    }
+  }
 
   return {
     ok: true,
@@ -30,6 +38,7 @@ function buildStatus() {
     version: process.env.CONTAINER_VERSION || 'dev',
     mode: process.env.CONTAINER_MODE || 'status',
     probe,
+    r2Mount,
     startError,
     pid: process.pid,
     uptime: Math.round(process.uptime()),

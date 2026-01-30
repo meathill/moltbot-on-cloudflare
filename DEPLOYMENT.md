@@ -63,6 +63,8 @@ wrangler login
 
 > 说明：镜像内默认安装 `clawdbot@latest` 并自动探测 CLI，可用 `MOLTBOT_CLI=clawdbot` 强制指定。
 
+> 说明：镜像内默认安装 `clawdbot@latest` 并自动探测 CLI，可用 `MOLTBOT_CLI=clawdbot` 强制指定。
+
 ## 配置建议
 
 - 敏感信息（如 `SERVER_PASSWORD`）请使用 `wrangler secret put`

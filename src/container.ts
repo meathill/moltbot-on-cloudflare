@@ -18,6 +18,9 @@ const EXPLICIT_ENV_KEYS = [
   'MOLTBOT_GATEWAY_VERBOSE',
   'MOLTBOT_ALLOW_UNCONFIGURED',
   'MOLTBOT_CLI',
+  'MOLTBOT_WORKSPACE_DIR',
+  'CLAWDBOT_WORKSPACE_DIR',
+  'CLAWDBOT_STATE_DIR',
   'CLAWDBOT_AUTO_APPROVE_DEVICES',
   'CLAWDBOT_AUTO_APPROVE_NODES',
   'CLAWDBOT_AUTO_APPROVE_INTERVAL_MS',
@@ -25,10 +28,47 @@ const EXPLICIT_ENV_KEYS = [
   'CLAWDBOT_CONFIG_PATH',
   'CLAWDBOT_GATEWAY_TOKEN',
   'CLAWDBOT_GATEWAY_PASSWORD',
+  'S3_ENDPOINT',
+  'S3_BUCKET',
+  'S3_ACCESS_KEY_ID',
+  'S3_SECRET_ACCESS_KEY',
+  'S3_REGION',
+  'S3_PATH_STYLE',
+  'S3_PREFIX',
+  'S3_MOUNT_POINT',
+  'S3_MOUNT_REQUIRED',
+  'TIGRISFS_ARGS',
 ] as const;
 
 const runtimeEnv: Record<string, unknown> = env as Record<string, unknown>;
 let didLogContainerConfig = false;
+const DO_DIAGNOSTICS_PATH = '/__do';
+
+type DiagnosticError = {
+  name?: string;
+  message: string;
+  stack?: string;
+};
+
+type LastErrorSnapshot = {
+  at: number;
+  error: DiagnosticError;
+};
+
+type LastStopSnapshot = {
+  at: number;
+  params: StopParams;
+};
+
+export type ContainerDiagnostics = {
+  bind: string;
+  port: number;
+  bindSource: string;
+  portSource: string;
+  explicitEnvKeys: string[];
+  containerEnvKeyCount: number;
+  containerEnvKeys: string[];
+};
 
 type DiagnosticError = {
   name?: string;

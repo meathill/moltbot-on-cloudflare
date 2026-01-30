@@ -8,6 +8,9 @@ const path = require('path');
 const DEFAULT_PORT = 18789;
 const DEFAULT_BIND_MODE = 'lan';
 const DEFAULT_CONFIG_PATH = '/root/.clawdbot/moltbot.json';
+const DEFAULT_R2_MOUNT_POINT = '/root/s3';
+const DEFAULT_STATE_SUBDIR = '.clawdbot';
+const DEFAULT_WORKSPACE_SUBDIR = 'workspace';
 const DEFAULT_AUTO_APPROVE_INTERVAL = 4000;
 let didLogNetInfo = false;
 
@@ -36,6 +39,10 @@ function parseInterval(value) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AUTO_APPROVE_INTERVAL;
   return parsed;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function writeConfigFile(configPath, configBody) {
@@ -68,6 +75,17 @@ function recordStartError(error) {
   } catch (err) {
     process.env.MOLTBOT_START_ERROR = JSON.stringify({
       message: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+function recordMountStatus(status) {
+  globalThis.__moltbotR2Mount = status;
+  try {
+    process.env.MOLTBOT_R2_MOUNT_STATUS = JSON.stringify(status);
+  } catch (error) {
+    process.env.MOLTBOT_R2_MOUNT_STATUS = JSON.stringify({
+      error: error instanceof Error ? error.message : String(error),
     });
   }
 }
@@ -128,6 +146,192 @@ function resolveNpmGlobalRoot() {
     stdout: result.stdout,
     stderr: result.stderr,
   };
+}
+
+function resolveMountPoint() {
+  return readEnvString('S3_MOUNT_POINT') || DEFAULT_R2_MOUNT_POINT;
+}
+
+function listMissingS3Keys(config) {
+  const missing = [];
+  if (!config.endpoint) missing.push('S3_ENDPOINT');
+  if (!config.bucket) missing.push('S3_BUCKET');
+  if (!config.accessKeyId) missing.push('S3_ACCESS_KEY_ID');
+  if (!config.secretAccessKey) missing.push('S3_SECRET_ACCESS_KEY');
+  return missing;
+}
+
+function readS3Config() {
+  return {
+    endpoint: readEnvString('S3_ENDPOINT'),
+    bucket: readEnvString('S3_BUCKET'),
+    accessKeyId: readEnvString('S3_ACCESS_KEY_ID'),
+    secretAccessKey: readEnvString('S3_SECRET_ACCESS_KEY'),
+    region: readEnvString('S3_REGION') || 'auto',
+    pathStyle: readEnvString('S3_PATH_STYLE') || 'false',
+    prefix: readEnvString('S3_PREFIX'),
+  };
+}
+
+function normalizePrefix(prefix) {
+  if (!prefix) return undefined;
+  return prefix.replace(/^\/+/, '');
+}
+
+function buildBucketSpec(config) {
+  const prefix = normalizePrefix(config.prefix);
+  if (prefix) return `${config.bucket}:${prefix}`;
+  return config.bucket;
+}
+
+function isMountPoint(mountPoint) {
+  try {
+    const mounts = fs.readFileSync('/proc/mounts', 'utf8');
+    const lines = mounts.split('\n');
+    for (const line of lines) {
+      if (!line) continue;
+      const parts = line.split(' ');
+      if (parts.length < 2) continue;
+      const mountedPath = parts[1].replace(/\\040/g, ' ');
+      if (mountedPath === mountPoint) return true;
+    }
+  } catch (error) {
+    return false;
+  }
+  return false;
+}
+
+function unmountIfMounted(mountPoint) {
+  if (!isMountPoint(mountPoint)) return;
+  const result = runSync('fusermount', ['-u', mountPoint]);
+  if (!result.ok) {
+    runSync('umount', [mountPoint]);
+  }
+}
+
+function ensureCleanMountPoint(mountPoint) {
+  unmountIfMounted(mountPoint);
+  fs.rmSync(mountPoint, { recursive: true, force: true });
+  fs.mkdirSync(mountPoint, { recursive: true });
+}
+
+function applyPersistentPaths(mountPoint) {
+  const stateDir =
+    readEnvString('CLAWDBOT_STATE_DIR') || path.join(mountPoint, DEFAULT_STATE_SUBDIR);
+  const workspaceDir =
+    readEnvString('MOLTBOT_WORKSPACE_DIR') ||
+    readEnvString('CLAWDBOT_WORKSPACE_DIR') ||
+    path.join(mountPoint, DEFAULT_WORKSPACE_SUBDIR);
+
+  process.env.CLAWDBOT_STATE_DIR = stateDir;
+  process.env.MOLTBOT_WORKSPACE_DIR = workspaceDir;
+  if (!readEnvString('CLAWDBOT_CONFIG_PATH')) {
+    process.env.CLAWDBOT_CONFIG_PATH = path.join(stateDir, 'moltbot.json');
+  }
+
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.mkdirSync(workspaceDir, { recursive: true });
+
+  return { stateDir, workspaceDir };
+}
+
+function parseExtraArgs(value) {
+  if (!value) return [];
+  return value.trim().split(/\s+/).filter(Boolean);
+}
+
+async function mountR2IfConfigured() {
+  const mountPoint = resolveMountPoint();
+  const s3Config = readS3Config();
+  const missing = listMissingS3Keys(s3Config);
+  const mountRequiredValue = readEnvString('S3_MOUNT_REQUIRED');
+  const mountRequired =
+    mountRequiredValue === undefined
+      ? DEFAULT_MOUNT_REQUIRED
+      : parseBoolean(mountRequiredValue);
+
+  if (missing.length > 0) {
+    recordMountStatus({
+      enabled: false,
+      mountPoint,
+      missing,
+    });
+    return { mounted: false, skipped: true };
+  }
+
+  ensureCleanMountPoint(mountPoint);
+
+  process.env.AWS_ACCESS_KEY_ID = s3Config.accessKeyId;
+  process.env.AWS_SECRET_ACCESS_KEY = s3Config.secretAccessKey;
+  process.env.AWS_REGION = s3Config.region;
+  process.env.AWS_S3_PATH_STYLE = s3Config.pathStyle;
+
+  const bucketSpec = buildBucketSpec(s3Config);
+  const tigrisArgs = [
+    '--endpoint',
+    s3Config.endpoint,
+    ...parseExtraArgs(readEnvString('TIGRISFS_ARGS')),
+    '-f',
+    bucketSpec,
+    mountPoint,
+  ];
+
+  console.log('[entrypoint] 挂载 R2', {
+    bucket: s3Config.bucket,
+    prefix: normalizePrefix(s3Config.prefix),
+    mountPoint,
+  });
+
+  const child = spawn('/usr/bin/tigrisfs', tigrisArgs, {
+    env: process.env,
+    stdio: 'inherit',
+  });
+  let spawnError = null;
+  child.on('error', (error) => {
+    spawnError = error;
+  });
+
+  for (let i = 0; i < MOUNT_CHECK_RETRIES; i += 1) {
+    if (isMountPoint(mountPoint)) {
+      const paths = applyPersistentPaths(mountPoint);
+      recordMountStatus({
+        enabled: true,
+        mounted: true,
+        mountPoint,
+        bucket: s3Config.bucket,
+        prefix: normalizePrefix(s3Config.prefix),
+        stateDir: paths.stateDir,
+        workspaceDir: paths.workspaceDir,
+      });
+      console.log('[entrypoint] R2 挂载成功', { mountPoint });
+      return { mounted: true };
+    }
+    await sleep(MOUNT_CHECK_INTERVAL_MS);
+  }
+
+  const error = new Error(
+    spawnError
+      ? `R2 挂载失败：${spawnError instanceof Error ? spawnError.message : String(spawnError)}`
+      : 'R2 挂载失败：未检测到挂载点',
+  );
+  recordMountStatus({
+    enabled: true,
+    mounted: false,
+    mountPoint,
+    bucket: s3Config.bucket,
+    prefix: normalizePrefix(s3Config.prefix),
+    error: error.message,
+  });
+
+  if (mountRequired) {
+    child.kill('SIGTERM');
+    throw error;
+  }
+
+  console.warn('[entrypoint] R2 挂载失败，将继续使用本地目录', {
+    mountPoint,
+  });
+  return { mounted: false };
 }
 
 function probeCommand(command) {
@@ -298,9 +502,9 @@ function buildCliArgs(resolved, extraArgs) {
 function resolveGatewayPort() {
   return parsePort(
     readEnvString('CLAWDBOT_GATEWAY_PORT') ||
-      readEnvString('MOLTBOT_GATEWAY_PORT') ||
-      readEnvString('CONTAINER_PORT') ||
-      readEnvString('PORT'),
+    readEnvString('MOLTBOT_GATEWAY_PORT') ||
+    readEnvString('CONTAINER_PORT') ||
+    readEnvString('PORT'),
   );
 }
 
@@ -490,6 +694,8 @@ function buildDefaultConfig() {
   const authMode = readEnvString('MOLTBOT_GATEWAY_AUTH_MODE') || 'token';
   const token = readEnvString('CLAWDBOT_GATEWAY_TOKEN');
   const password = readEnvString('CLAWDBOT_GATEWAY_PASSWORD');
+  const workspaceDir =
+    readEnvString('MOLTBOT_WORKSPACE_DIR') || readEnvString('CLAWDBOT_WORKSPACE_DIR');
 
   if (bindMode !== 'loopback') {
     if (authMode === 'password' && !password) {
@@ -513,6 +719,14 @@ function buildDefaultConfig() {
       auth,
     },
   };
+
+  if (workspaceDir) {
+    config.agents = {
+      defaults: {
+        workspace: workspaceDir,
+      },
+    };
+  }
 
   return JSON.stringify(config, null, 2);
 }
@@ -594,15 +808,13 @@ if (mode === 'probe') {
   recordProbe(resolved);
   startStatusServer();
 } else if (mode === 'moltbot') {
-  try {
-    startMoltbot();
-  } catch (error) {
+  startMoltbot().catch((error) => {
     console.error('[entrypoint] Moltbot 启动失败', {
       message: error instanceof Error ? error.message : String(error),
     });
     recordStartError(error);
     startStatusServer();
-  }
+  });
 } else {
   startStatusServer();
 }

@@ -42,3 +42,41 @@
 ### 经验
 - `bind=lan` 时，**不要假设 127.0.0.1 可用**；配对/CLI 需连接容器 LAN IP。
 - UI pairing 依赖 **device pairing**，不是 `nodes pending/approve`。
+
+## 排障记录：SQLite 权限与 DO 迁移问题
+
+### 现象
+- DQ 日志出现：
+  - `SQL Execution Error: access to _cf_METADATA.key is prohibited: SQLITE_AUTH`
+- 部署时报错：
+  - `Cannot apply new-sqlite-class migration to class 'MoltbotContainer'`
+  - `New version of script does not export class 'MoltbotContainer'`
+  - `Cannot apply deleted_classes migration to non-existent class MoltbotContainer`
+
+### 关键卡点与根因
+- **DO 类名/导出不一致**：Worker 代码没有导出指定的 DO 类，或类名发生变化，导致迁移失败。
+- **迁移策略不匹配**：尝试对已被依赖的 DO 类做 `new-sqlite-class` 或删除，Cloudflare 会拒绝。
+- **SQLite 权限限制**：Cloudflare 的 sqlite 环境禁止访问 `_cf_METADATA` 等内部表。
+
+### 解决方案（已验证）
+- 确保 `export { MoltbotContainer }` 且 DO 绑定名称与类名一致。
+- 避免对已使用的 DO 类做破坏性迁移；必要时**删除 Worker 并重建**，避免迁移冲突。
+- 不在容器侧直接访问 Cloudflare 的内部 sqlite metadata 表。
+
+## 排障记录：UI 可打开但 Health Offline / Schema unavailable
+
+### 现象
+- Control UI 能打开，但右上角 `Health Offline`。
+- `Settings > Config` 显示 `Schema unavailable`。
+- UI 提示 `disconnected (1008): pairing required` 或 `unauthorized: gateway token missing`。
+
+### 关键卡点与根因
+- **Gateway 未真正启动**：容器虽然响应 `/`，但实际网关进程崩溃或未监听 WS。
+- **未完成 device pairing**：UI 连接未配对即被断开。
+- **配置路径/环境变量不一致**：`CLAWDBOT_CONFIG_PATH` 指向错误位置会导致配置/Schema 读取失败。
+- **UI 不安全上下文**：非 HTTPS 或非 localhost 时，WebCrypto 不可用，默认拒绝配对。
+
+### 解决方案（已验证）
+- 先用 `/__do?action=wait` 确认网关端口健康，再打开 UI。
+- 自动配对改为 `devices` 并确保 CLI 能连到网关（LAN IP / 指定 `CLAWDBOT_GATEWAY_URL`）。
+- 对齐配置路径为 `~/.clawdbot/moltbot.json`，确保网关启动后可提供 `config.schema`。
